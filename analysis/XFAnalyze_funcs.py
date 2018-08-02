@@ -6,7 +6,7 @@ from idc import *
 from idaapi import *
 
 '''
-XFAnalyze_funcs.py, Sebastian Apelt, siberas, 2016
+XFAnalyze_funcs.py, Sebastian Apelt, @bitshifter123
 
 finds:
 - jfCacheManager::getCacheManager
@@ -38,7 +38,7 @@ if len(ARGV) > 1:
 	
 # user later for symbol export. set a non-existant func flag to "mark" it
 # ok ok, let's call it a hack... ^^
-SELF_FLAG = pow(2, 12)
+SELF_FLAG = pow(2, 13)
 
 xfadb = AskFile(0, "*.json", "Select the XFAdb_v941.json file")
 fh = open(xfadb)

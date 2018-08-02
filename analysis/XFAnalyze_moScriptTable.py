@@ -6,13 +6,15 @@ from idc import *
 from idaapi import *
 
 '''
-XFAnalyze_moScriptTable.py, Sebastian Apelt, siberas, 2016
+XFAnalyze_moScriptTable.py, Sebastian Apelt (@bitshifter123)
 
 finds:
 - all entrypoints for getter/setter methods of object-properties
 - all entrypoints for scripting methods
 - vtable functions (as good as possible) <- still rather crude implementation...
 '''
+
+SELF_FLAG = pow(2, 13)
 
 # unset this if you don't want the func names to be overwritten!
 setnames = True
@@ -23,6 +25,11 @@ logfile = os.path.abspath(".\\log.txt")
 if len(ARGV) > 1:
 	import datetime
 	logfile = ARGV[1] + "\\log_%s.txt" % datetime.datetime.now().isoformat().replace(":", "_")
+	
+# check self-defined flag usability... it must not be set on any func!
+for f in Functions():
+	if GetFunctionFlags(f) & SELF_FLAG != 0:
+		raise Exception("SELF_FLAG 0x%x already defined on func @ 0x%x. exiting!" % (SELF_FLAG, f))
 	
 xfadb = AskFile(0, "*.json", "Select the XFAdb_v941.json file")
 fh = open(xfadb)
@@ -37,7 +44,6 @@ textend 	= get_segm_by_name(".text").endEA
 datastart	= get_segm_by_name(".data").startEA
 dataend 	= get_segm_by_name(".data").endEA
 	
-SELF_FLAG = pow(2, 12)
 	
 def isValidCode(addr):
 	if textstart <= addr < textend:
@@ -87,9 +93,9 @@ def createsym(address, name, symlog=True):
 		log(s)
 	
 	if setnames:
-		name = name.replace("#", "HASHSYM_")
-		set_name(address, name, SN_NOWARN)
-		SetFunctionFlags(address, SELF_FLAG)
+		name = name.replace("#", "HASHSYM_").encode("ascii")
+		idaapi.set_name(address, name, SN_NOWARN)
+		SetFunctionFlags(address, GetFunctionFlags(address) | SELF_FLAG)
 		
 		
 targetfile = os.path.abspath(GetInputFile())

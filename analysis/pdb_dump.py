@@ -6,23 +6,25 @@ from idautils import *
 import sys
 import pefile
 from struct import *
-from construct import *
 import binascii
 
 '''
-pdb_dump.py, sebastian apelt, siberas, 2016
+pdb_dump.py, sebastian apelt (@bitshifter123), 08/2018
 
 script to dump self-defined function symbols to .pdb file
 quick&dirty + full of hacks, but works. kindof :P
 
-the functions which are to be dumped have to be marked with SetFunctionFlags(address, SELF_FLAG)
+the functions which are to be dumped have to be marked with SetFunctionFlags(address, GetFunctionFlags(address) | SELF_FLAG)
 anyone knowns a good way to "mark" certain bytes (not only funcs)? if yes, please tell me so that I can remove this ugly hack :)
 '''
 
-# adjust this! the script needs to find the pdb templates
-pdbtpl_dir = r"K:\code\python\idapython\scripts\AR"
+# we expect the pdb tpl files to be in the same folder...
+pdbtpl_dir = sys.path[-1]
+if not os.path.isfile(pdbtpl_dir + "\\tpl_10000.pdb"):
+	raise Exception("missing the tpl pdb files!")
+	
 
-SELF_FLAG = pow(2, 12)
+SELF_FLAG = pow(2, 13)
 
 file = GetInputFilePath()
 print "[+] input file: %s" % file
@@ -44,7 +46,8 @@ for address in Functions():
 
 for x in range(2, 6):
 	if cnt < pow(10, x):
-		break		
+		break	
+		
 pdbtpl = "tpl_%d.pdb" % pow(10,x)
 print "[+] reading pdb template %s" % pdbtpl
 pdbtpl_data = open("%s\\%s" % (pdbtpl_dir, pdbtpl), "rb").read()	
@@ -55,16 +58,18 @@ cnt = 0
 # search for self-defined function names (special flag set via SetFunctionFlags)
 for address in Functions():
 	if GetFunctionFlags(address) & SELF_FLAG != 0:
-		orgname = get_name(address, address)
+		orgname = get_name(address)
 		name = Demangle(orgname, INF_SHORT_DN)
 		if name == None:
 			name = orgname			
-		print "[+] setting symbol: %s @ 0x%x" % (name, address)
-		off = pdbtpl_data.find("?_XXX_")
-		pdbtpl_data = pdbtpl_data[:off] + name + "\x00" + pdbtpl_data[off + len(name) + 1:]
-		pdbtpl_data = pdbtpl_data[:(off-6)] + pack("I", (address - (imgbase+0x1000))) + pdbtpl_data[(off-2):]
-		pdbtpl_data = pdbtpl_data[:(off-2)] + pack("H", section_number) + pdbtpl_data[off:]
-		cnt += 1
+			
+		if not name.startswith("sub_") and not name.startswith("unknown") and len(name) < 120:
+			print "[+] setting symbol: %s @ 0x%x" % (name, address)
+			off = pdbtpl_data.find("?_XXX_")
+			pdbtpl_data = pdbtpl_data[:off] + name + "\x00" + pdbtpl_data[off + len(name) + 1:]
+			pdbtpl_data = pdbtpl_data[:(off-6)] + pack("I", (address - (imgbase+0x1000))) + pdbtpl_data[(off-2):]
+			pdbtpl_data = pdbtpl_data[:(off-2)] + pack("H", section_number) + pdbtpl_data[off:]
+			cnt += 1
 				
 # delete the unused placeholders
 off = 0
@@ -84,16 +89,7 @@ fh.seek(dbgstruct.PointerToRawData)
 dbgdata = fh.read(dbgstruct.SizeOfData)
 fh.close()
 
-def GUID(name):
-	return Struct(name, ULInt32("Data1"), ULInt16("Data2"), ULInt16("Data3"), String("Data4", 8),)
-
-CV_RSDS_HEADER = Struct("CV_RSDS",
-	Const(Bytes("Signature", 4), "RSDS"),
-	GUID("GUID"),
-	ULInt32("Age"),
-	CString("Filename"),
-)
-
+'''
 try:
 	dbg = CV_RSDS_HEADER.parse(dbgdata)
 except:
@@ -103,9 +99,13 @@ except:
 	off = data.find("RSDS")
 	dbgdata = data[off : off+dbgstruct.SizeOfData]
 	dbg = CV_RSDS_HEADER.parse(dbgdata)
+'''
 
-guid_str = "%08x%04x%04x%s%x" % (dbg.GUID.Data1, dbg.GUID.Data2, dbg.GUID.Data3, dbg.GUID.Data4.encode('hex'), dbg.Age)
-guid_str = guid_str.upper()
+fmt = "4sIHH8sI"
+structsize = calcsize(fmt)
+sig, guid_pt1, guid_pt2, guid_pt3, guid_pt4, age = unpack(fmt, dbgdata[:structsize])
+
+guid_str = ("%08x%04x%04x%s%x" % (guid_pt1, guid_pt2, guid_pt3, guid_pt4.encode('hex'), age)).upper()
 guid = dbgdata[0x4:0x14] 
 
 fdata = open(file, "rb").read()
@@ -113,9 +113,8 @@ timestamp = unpack("I", fdata[pe.DOS_HEADER.e_lfanew + 8: pe.DOS_HEADER.e_lfanew
 	
 print "[+] raw: %s" % repr(dbgdata)
 print "[+] hexlified: %s" % binascii.hexlify(dbgdata)
-print "[+] parsed: %s" % dbg
 print "[+] GUID: %s (guid raw data: %s)" % (guid_str, binascii.hexlify(guid))
-print "[+] AGE: %x" % dbg.Age
+print "[+] AGE: %x" % age
 print "[+] TIMESTAMP: 0x%x" % timestamp
 
 pdb_data = pdbtpl_data
@@ -127,7 +126,7 @@ while(1):
 		break
 	print "[+] /LinkInfo @ 0x%x. fixing timestamp/age/guid fields..." % off
 	pdb_data = pdb_data[:(off-0x1c)] + pack("I", timestamp) + pdb_data[(off-0x18):]
-	pdb_data = pdb_data[:(off-0x18)] + pack("I", dbg.Age) + pdb_data[(off-0x14):]
+	pdb_data = pdb_data[:(off-0x18)] + pack("I", age) + pdb_data[(off-0x14):]
 	pdb_data = pdb_data[:(off-0x14)] + guid + pdb_data[(off-0x4):]	
 	off += 1
 	
@@ -141,9 +140,10 @@ you can find the second one by searching the pdb for the static values 0xfffffff
 print "[+] fixing second age field..."
 off = pdb_data.find(binascii.unhexlify("FFFFFFFF77093101"))
 if off == -1:
-	print "[-] could not find FFFFFFFF77093101 pattern!"
-	sys.exit(1)	
-pdb_data = pdb_data[:(off+0x08)] + pack("I", dbg.Age) + pdb_data[(off+0x0c):]	
+	raise Exception("could not find FFFFFFFF77093101 pattern!")
+	
+	
+pdb_data = pdb_data[:(off+0x08)] + pack("I", age) + pdb_data[(off+0x0c):]	
 	
 outfile = AskFile(1, "%s.pdb" % file.rsplit(".", 1)[0], "chose folder where to save the pdb file")
 print "[+] writing pdb to '%s'" % outfile
